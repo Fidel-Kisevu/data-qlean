@@ -46,14 +46,28 @@ def list_suggestions(session_id: str):
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    # Fresh detection from the current state of the data
     issues = detect_issues(df)
-    suggestions = issues_to_suggestions(issues)
-    _save_suggestions(session_id, suggestions)
+    fresh = issues_to_suggestions(issues)
+
+    # Load previously saved suggestions and remember their statuses.
+    # Suggestion IDs are stable (hash of rule + column), so the same
+    # issue keeps the same ID across refreshes.
+    previous = _load_suggestions(session_id)
+    previous_status = {s["id"]: s.get("status", "pending") for s in previous}
+
+    # Carry over statuses. Anything previously approved or rejected
+    # stays that way — even if the issue still fires.
+    for s in fresh:
+        if s["id"] in previous_status:
+            s["status"] = previous_status[s["id"]]
+
+    _save_suggestions(session_id, fresh)
     return {
         "session_id": session_id,
         "status": "ok",
-        "count": len(suggestions),
-        "suggestions": suggestions,
+        "count": len(fresh),
+        "suggestions": fresh,
     }
 
 
@@ -69,10 +83,13 @@ def act_on_suggestion(session_id: str, suggestion_id: str, body: SuggestionActio
 
     suggestions = _load_suggestions(session_id)
     target = next((s for s in suggestions if s["id"] == suggestion_id), None)
+
     if not target:
+        # Regenerate once in case the file is stale
         suggestions = issues_to_suggestions(detect_issues(df))
         _save_suggestions(session_id, suggestions)
         target = next((s for s in suggestions if s["id"] == suggestion_id), None)
+
     if not target:
         raise HTTPException(
             status_code=404,
@@ -82,7 +99,7 @@ def act_on_suggestion(session_id: str, suggestion_id: str, body: SuggestionActio
     if body.action == "reject":
         target["status"] = "rejected"
         _save_suggestions(session_id, suggestions)
-        touch_project_meta(session_id)  # ← added
+        touch_project_meta(session_id)
         return {
             "session_id": session_id,
             "suggestion_id": suggestion_id,
@@ -95,7 +112,7 @@ def act_on_suggestion(session_id: str, suggestion_id: str, body: SuggestionActio
 
     df = apply_suggestion(df, target)
     save_working_copy(df, working_path)
-    touch_project_meta(session_id)  # ← added
+    touch_project_meta(session_id)
     target["status"] = "approved"
     _save_suggestions(session_id, suggestions)
     return {

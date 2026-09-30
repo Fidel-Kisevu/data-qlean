@@ -12,9 +12,23 @@ PHONE_HEADER_RE = re.compile(r"phone|mobile|contact|tel", re.IGNORECASE)
 KENYAN_LOCAL_RE = re.compile(r"^0[17]\d{8}$")
 KENYAN_INTL_RE = re.compile(r"^\+?254[17]\d{8}$")
 
+# Name detection
+NAME_HEADER_RE = re.compile(r"\bname\b|surname|first.?name|last.?name|full.?name", re.IGNORECASE)
+
+# Columns that are already derived — skip to prevent cascading rules
+DERIVED_SUFFIXES = ("_normalized", "_e164", "_raw", "_cleaned")
+
+# Placeholder values that should be treated as missing
+PLACEHOLDER_VALUES = {
+    "n/a", "na", "n.a.", "none", "null", "nil", "-", "--", "---",
+    "unknown", "unspecified", "not applicable", "tbd", "tba",
+    "000", "999", "xxx", "xxxx",
+}
+
+
+# ---------- Phone helpers ----------
 
 def _clean_phone_string(s: str) -> str:
-    """Strip spaces, dashes, letter-O typos, and take the first of multiple numbers."""
     s = s.replace("O", "0").replace("o", "0").strip()
     if "/" in s:
         s = s.split("/")[0].strip()
@@ -25,7 +39,6 @@ def _clean_phone_string(s: str) -> str:
 
 
 def _classify_phone(s: str) -> str:
-    """Return 'local', 'international', 'bare-254', or 'unparseable'."""
     cleaned = _clean_phone_string(s)
     if KENYAN_LOCAL_RE.match(cleaned):
         return "local"
@@ -41,6 +54,51 @@ def _looks_like_phone(s: str) -> bool:
         return False
     return _classify_phone(s) != "unparseable"
 
+
+# ---------- Name helpers ----------
+
+def _is_placeholder(s: str) -> bool:
+    return s.strip().lower() in PLACEHOLDER_VALUES
+
+
+def _is_numeric_name(s: str) -> bool:
+    s = s.strip()
+    if not s:
+        return False
+    if re.fullmatch(r"[\d\-\.\s]+", s):
+        return True
+    digit_ratio = sum(c.isdigit() for c in s) / len(s)
+    return digit_ratio >= 0.4 and len(re.findall(r"\d", s)) >= 4
+
+
+def _is_alphabetic_name(s: str) -> bool:
+    s = s.strip()
+    if not s or _is_placeholder(s):
+        return False
+    if _is_numeric_name(s):
+        return False
+    letters = sum(c.isalpha() or c in " '-." for c in s)
+    return letters / len(s) >= 0.7
+
+
+def _case_class(s: str) -> str:
+    s = s.strip()
+    letters = [c for c in s if c.isalpha()]
+    if not letters:
+        return "other"
+    if all(c.isupper() for c in letters):
+        return "upper"
+    if all(c.islower() for c in letters):
+        return "lower"
+    return "mixed"
+
+
+def _is_derived(col_name: str) -> bool:
+    """True if the column is already a derived/normalized column."""
+    return str(col_name).endswith(DERIVED_SUFFIXES)
+
+
+# ---------- Main detector ----------
 
 def detect_issues(df: pd.DataFrame) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
@@ -105,6 +163,8 @@ def detect_issues(df: pd.DataFrame) -> list[dict[str, Any]]:
 
     # --- Column: numbers stored as text ---
     for col in df.columns:
+        if _is_derived(col):
+            continue
         if df[col].dtype == "object":
             sample = df[col].dropna().astype(str).head(80)
             if len(sample) == 0:
@@ -121,6 +181,8 @@ def detect_issues(df: pd.DataFrame) -> list[dict[str, Any]]:
 
     # --- Column: whitespace ---
     for col in df.columns:
+        if _is_derived(col):
+            continue
         if df[col].dtype == "object":
             s = df[col].dropna().astype(str)
             if len(s) == 0:
@@ -137,6 +199,8 @@ def detect_issues(df: pd.DataFrame) -> list[dict[str, Any]]:
 
     # --- Column: phone format consistency ---
     for col in df.columns:
+        if _is_derived(col):
+            continue
         header_is_phone = bool(PHONE_HEADER_RE.search(str(col)))
         sample = df[col].dropna().astype(str).head(200)
         if len(sample) == 0:
@@ -148,7 +212,6 @@ def detect_issues(df: pd.DataFrame) -> list[dict[str, Any]]:
         if not (header_is_phone or content_is_phone):
             continue
 
-        # Classify each phone in the sample
         formats: dict[str, int] = {}
         unparseable = 0
         for v in sample:
@@ -160,7 +223,6 @@ def detect_issues(df: pd.DataFrame) -> list[dict[str, Any]]:
 
         format_count = len(formats)
 
-        # Fire only if there's variety or unparseable values
         if format_count > 1 or unparseable > 0:
             detail_parts = [f"{k}: {v}" for k, v in sorted(formats.items())]
             if unparseable:
@@ -176,6 +238,101 @@ def detect_issues(df: pd.DataFrame) -> list[dict[str, Any]]:
                 ),
                 "formats": sorted(formats.keys()),
                 "unparseable_count": unparseable,
+            })
+
+    # --- Column: name case consistency ---
+    for col in df.columns:
+        if _is_derived(col):
+            continue
+        if not NAME_HEADER_RE.search(str(col)):
+            continue
+
+        sample = df[col].dropna().astype(str).head(200)
+        sample = sample[sample.apply(lambda v: bool(v.strip()))]
+        if len(sample) < 5:
+            continue
+
+        alpha_ratio = sample.apply(_is_alphabetic_name).mean()
+        if alpha_ratio < 0.5:
+            continue
+
+        cases: dict[str, int] = {}
+        for v in sample:
+            if not _is_alphabetic_name(v):
+                continue
+            c = _case_class(v)
+            cases[c] = cases.get(c, 0) + 1
+
+        upper = cases.get("upper", 0)
+        lower = cases.get("lower", 0)
+        mixed = cases.get("mixed", 0)
+        total_alpha = upper + lower + mixed
+
+        if total_alpha == 0:
+            continue
+
+        # Fire only if there's real variety or the column is entirely upper/lower
+        needs_fix = (
+            (upper > 0 and (lower > 0 or mixed > 0)) or
+            (lower > 0 and mixed > 0) or
+            (upper / total_alpha >= 0.9) or
+            (lower / total_alpha >= 0.9)
+        )
+
+        if needs_fix:
+            parts = []
+            if upper: parts.append(f"{upper} ALL CAPS")
+            if lower: parts.append(f"{lower} lowercase")
+            if mixed: parts.append(f"{mixed} mixed")
+            issues.append({
+                "rule_id": "NAME_CASE",
+                "type": "name_case",
+                "column": str(col),
+                "severity": "low",
+                "message": (
+                    f"Column '{col}' has inconsistent capitalization "
+                    f"({', '.join(parts)})"
+                ),
+                "upper_count": upper,
+                "lower_count": lower,
+                "mixed_count": mixed,
+            })
+
+    # --- Column: invalid values in name column ---
+    for col in df.columns:
+        if _is_derived(col):
+            continue
+        if not NAME_HEADER_RE.search(str(col)):
+            continue
+
+        sample = df[col].dropna().astype(str).head(500)
+        sample = sample[sample.apply(lambda v: bool(v.strip()))]
+        if len(sample) == 0:
+            continue
+
+        invalid_values = []
+        for v in sample:
+            if _is_placeholder(v) or _is_numeric_name(v):
+                invalid_values.append(v)
+
+        invalid_count = len(invalid_values)
+        invalid_ratio = invalid_count / len(sample)
+
+        if invalid_count > 0 and invalid_ratio < 0.5:
+            preview = ", ".join(invalid_values[:5])
+            if invalid_count > 5:
+                preview += f", … (+{invalid_count - 5} more)"
+            issues.append({
+                "rule_id": "NUMERIC_IN_NAME",
+                "type": "numeric_in_name",
+                "column": str(col),
+                "severity": "medium",
+                "message": (
+                    f"Column '{col}' has {invalid_count} invalid value(s) "
+                    f"(numbers or placeholders): {preview}"
+                ),
+                "invalid_count": invalid_count,
+                "samples": invalid_values[:5],
             })
 
     return issues
