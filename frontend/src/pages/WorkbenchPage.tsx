@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Button } from '../components/ui/Button'
 import type { Change, QualityIssue, Suggestion } from '../types'
+import type { CellFlag } from '../api/client'
 
 type WorkbenchPageProps = {
   sessionId: string | null
@@ -10,6 +11,7 @@ type WorkbenchPageProps = {
   suggestions: Suggestion[]
   issues: QualityIssue[]
   changes: Change[]
+  flags: CellFlag[]
   busy: boolean
   onApprove: (ids: string[]) => void
   onReject: (ids: string[]) => void
@@ -63,6 +65,12 @@ function simplifyTitle(title: string, count: number): string {
   return title.replace(/['"][^'"]+['"]/, '').replace(/\s+/g, ' ').trim()
 }
 
+const severityCellClass = (severity: string) => {
+  if (severity === 'high') return 'bg-rose-50 shadow-[inset_2px_0_0_#E11D48]'
+  if (severity === 'medium') return 'bg-amber-50 shadow-[inset_2px_0_0_#D97706]'
+  return 'bg-sky-50 shadow-[inset_2px_0_0_#0284C7]'
+}
+
 export function WorkbenchPage(props: WorkbenchPageProps) {
   const {
     sessionId,
@@ -71,6 +79,7 @@ export function WorkbenchPage(props: WorkbenchPageProps) {
     rows,
     suggestions,
     changes,
+    flags,
     busy,
     onApprove,
     onReject,
@@ -92,6 +101,7 @@ export function WorkbenchPage(props: WorkbenchPageProps) {
     col: string
     value: string
   } | null>(null)
+  const [showOnlyFlagged, setShowOnlyFlagged] = useState(false)
 
   const pending = useMemo(
     () => suggestions.filter((s) => s.status === 'pending'),
@@ -99,6 +109,27 @@ export function WorkbenchPage(props: WorkbenchPageProps) {
   )
 
   const groups = useMemo(() => groupSuggestions(pending), [pending])
+
+  // Fast lookup: "row|column" → CellFlag
+  const flagMap = useMemo(() => {
+    const map = new Map<string, CellFlag>()
+    for (const f of flags) {
+      map.set(`${f.row}|${f.column}`, f)
+    }
+    return map
+  }, [flags])
+
+  // Set of rows that have at least one flag (for the filter toggle)
+  const flaggedRows = useMemo(() => {
+    const s = new Set<number>()
+    for (const f of flags) s.add(f.row)
+    return s
+  }, [flags])
+
+  const visibleRows = useMemo(
+    () => (showOnlyFlagged ? rows.filter((_, i) => flaggedRows.has(i)) : rows),
+    [rows, flaggedRows, showOnlyFlagged]
+  )
 
   const approvedCount = suggestions.filter((s) => s.status === 'approved').length
   const rejectedCount = suggestions.filter((s) => s.status === 'rejected').length
@@ -174,7 +205,22 @@ export function WorkbenchPage(props: WorkbenchPageProps) {
         </div>
 
         <div className="flex shrink-0 items-center gap-2.5">
-          <div className="hidden items-center gap-3 rounded-lg border border-cream-200 bg-cream-50/80 px-3.5 py-1.5 text-[12px] text-ink-500 md:flex">
+          <label className="hidden items-center gap-2 rounded-lg border border-cream-200 bg-cream-50/80 px-3 py-1.5 text-[12px] text-ink-500 md:flex">
+            <input
+              type="checkbox"
+              checked={showOnlyFlagged}
+              onChange={(e) => setShowOnlyFlagged(e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-cream-300 text-accent focus:ring-accent/30"
+            />
+            <span>Issues only</span>
+            {flags.length > 0 && (
+              <span className="rounded bg-rose-100 px-1.5 py-0.5 font-mono text-[10px] font-medium text-rose-700">
+                {flaggedRows.size}
+              </span>
+            )}
+          </label>
+
+          <div className="hidden items-center gap-3 rounded-lg border border-cream-200 bg-cream-50/80 px-3.5 py-1.5 text-[12px] text-ink-500 lg:flex">
             <span>
               <span className="font-mono font-medium tabular-nums text-ink-800">
                 {pending.length}
@@ -227,7 +273,6 @@ export function WorkbenchPage(props: WorkbenchPageProps) {
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto">
-            {/* Pending groups */}
             <div className="space-y-2.5 bg-cream-50/60 p-3">
               {groups.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-cream-300 bg-white px-4 py-10 text-center">
@@ -272,7 +317,6 @@ export function WorkbenchPage(props: WorkbenchPageProps) {
               )}
             </div>
 
-            {/* Audit trail */}
             <div className="border-t border-cream-200 bg-white">
               <div className="flex items-center justify-between px-4 py-3">
                 <p className="text-[10px] font-semibold uppercase tracking-widest text-ink-500">
@@ -404,77 +448,92 @@ export function WorkbenchPage(props: WorkbenchPageProps) {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row, i) => (
-                  <tr
-                    key={i}
-                    className="border-b border-cream-100 transition-colors hover:bg-cream-50/80"
-                  >
-                    <td className="bg-cream-50/50 px-3 py-2 text-right font-mono text-[10px] tabular-nums text-ink-400">
-                      {i + 1}
-                    </td>
-                    {columns.map((col) => {
-                      const isHighlighted = highlightedColumns.includes(col)
-                      const isEditing =
-                        cellEdit?.row === i && cellEdit?.col === col
-                      const value = row[col]
+                {visibleRows.map((row) => {
+                  const i = rows.indexOf(row)
+                  return (
+                    <tr
+                      key={i}
+                      className="border-b border-cream-100 transition-colors hover:bg-cream-50/80"
+                    >
+                      <td className="bg-cream-50/50 px-3 py-2 text-right font-mono text-[10px] tabular-nums text-ink-400">
+                        {i + 1}
+                      </td>
+                      {columns.map((col) => {
+                        const isHighlighted = highlightedColumns.includes(col)
+                        const isEditing =
+                          cellEdit?.row === i && cellEdit?.col === col
+                        const value = row[col]
+                        const flag = flagMap.get(`${i}|${col}`)
+                        const isFlagged = !!flag
 
-                      return (
-                        <td
-                          key={col}
-                          className={`max-w-[280px] truncate px-3 py-2 align-top transition-colors duration-150 ${
-                            isHighlighted ? 'bg-accent-soft/50' : ''
-                          }`}
-                        >
-                          {isEditing ? (
-                            <input
-                              autoFocus
-                              value={cellEdit.value}
-                              onChange={(e) =>
-                                setCellEdit({
-                                  ...cellEdit,
-                                  value: e.target.value,
-                                })
-                              }
-                              onBlur={() => {
-                                onCellEdit(i, col, cellEdit.value)
-                                setCellEdit(null)
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
+                        const baseClass =
+                          'max-w-[280px] truncate px-3 py-2 align-top transition-colors duration-150'
+
+                        const stateClass = isEditing
+                          ? ''
+                          : isFlagged
+                            ? severityCellClass(flag.severity)
+                            : isHighlighted
+                              ? 'bg-accent-soft/50'
+                              : ''
+
+                        return (
+                          <td
+                            key={col}
+                            className={`${baseClass} ${stateClass}`}
+                            title={flag ? flag.message : undefined}
+                          >
+                            {isEditing ? (
+                              <input
+                                autoFocus
+                                value={cellEdit.value}
+                                onChange={(e) =>
+                                  setCellEdit({
+                                    ...cellEdit,
+                                    value: e.target.value,
+                                  })
+                                }
+                                onBlur={() => {
                                   onCellEdit(i, col, cellEdit.value)
                                   setCellEdit(null)
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    onCellEdit(i, col, cellEdit.value)
+                                    setCellEdit(null)
+                                  }
+                                  if (e.key === 'Escape') setCellEdit(null)
+                                }}
+                                className="w-full rounded-md border border-cream-300 bg-white px-2 py-1 font-mono text-[12px] text-ink-900 outline-none ring-accent/30 focus:border-accent focus:ring-2"
+                              />
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setCellEdit({
+                                    row: i,
+                                    col,
+                                    value: value == null ? '' : String(value),
+                                  })
                                 }
-                                if (e.key === 'Escape') setCellEdit(null)
-                              }}
-                              className="w-full rounded-md border border-cream-300 bg-white px-2 py-1 font-mono text-[12px] text-ink-900 outline-none ring-accent/30 focus:border-accent focus:ring-2"
-                            />
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setCellEdit({
-                                  row: i,
-                                  col,
-                                  value: value == null ? '' : String(value),
-                                })
-                              }
-                              className="w-full truncate rounded px-0.5 text-left text-ink-700 transition-colors hover:text-ink-900"
-                              title={value == null ? '' : String(value)}
-                            >
-                              {value == null ? (
-                                <span className="font-mono text-[10px] italic text-ink-400">
-                                  null
-                                </span>
-                              ) : (
-                                String(value)
-                              )}
-                            </button>
-                          )}
-                        </td>
-                      )
-                    })}
-                  </tr>
-                ))}
+                                className="w-full truncate rounded px-0.5 text-left text-ink-700 transition-colors hover:text-ink-900"
+                                title={value == null ? '' : String(value)}
+                              >
+                                {value == null ? (
+                                  <span className="font-mono text-[10px] italic text-ink-400">
+                                    null
+                                  </span>
+                                ) : (
+                                  String(value)
+                                )}
+                              </button>
+                            )}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
@@ -486,7 +545,7 @@ export function WorkbenchPage(props: WorkbenchPageProps) {
         <div className="flex items-center gap-3 text-[12px] text-ink-500">
           <span>
             <span className="font-mono font-medium tabular-nums text-ink-800">
-              {rows.length}
+              {showOnlyFlagged ? `${visibleRows.length} of ${rows.length}` : rows.length}
             </span>{' '}
             rows
           </span>
@@ -504,6 +563,17 @@ export function WorkbenchPage(props: WorkbenchPageProps) {
             </span>{' '}
             changes applied
           </span>
+          {flags.length > 0 && (
+            <>
+              <span className="text-cream-300">·</span>
+              <span className="text-rose-600">
+                <span className="font-mono font-medium tabular-nums">
+                  {flags.length}
+                </span>{' '}
+                flagged cell{flags.length === 1 ? '' : 's'}
+              </span>
+            </>
+          )}
         </div>
         <p className="hidden text-[12px] text-ink-400 sm:block">
           Click any cell to edit · click a column name to rename
@@ -513,7 +583,7 @@ export function WorkbenchPage(props: WorkbenchPageProps) {
   )
 }
 
-/* ---------- Group card ---------- */
+/* ---------- Group card (unchanged) ---------- */
 
 function GroupCard({
   group,
@@ -629,7 +699,7 @@ function GroupCard({
   )
 }
 
-/* ---------- Change row ---------- */
+/* ---------- Change row (unchanged) ---------- */
 
 function ChangeRow({ change }: { change: Change }) {
   const tone =

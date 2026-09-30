@@ -7,6 +7,7 @@ import {
   exportDataUrl,
   fetchChanges,
   fetchDataView,
+  fetchFlags,
   fetchProjects,
   fetchQuality,
   fetchSuggestions,
@@ -15,6 +16,7 @@ import {
   transformWorkingCopy,
   undoLast,
   uploadFile,
+  type CellFlag,
   type ProjectMeta,
 } from './api/client'
 
@@ -39,6 +41,7 @@ function App() {
   const [dataRows, setDataRows] = useState<Record<string, unknown>[]>([])
   const [dataCols, setDataCols] = useState<string[]>([])
   const [changes, setChanges] = useState<Change[]>([])
+  const [flags, setFlags] = useState<CellFlag[]>([])
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -96,17 +99,19 @@ function App() {
 
   // ---------- Refresh active session ----------
   const refreshAll = useCallback(async (sid: string) => {
-    const [q, s, d, c] = await Promise.all([
+    const [q, s, d, c, f] = await Promise.all([
       fetchQuality(sid),
       fetchSuggestions(sid),
       fetchDataView(sid, 10000, 0),
       fetchChanges(sid).catch(() => ({ changes: [] })),
+      fetchFlags(sid).catch(() => ({ flags: [] })),
     ])
     setIssues(q.issues ?? [])
     setSuggestions(s.suggestions ?? [])
     setDataCols(d.columns ?? [])
     setDataRows(d.rows ?? [])
     setChanges(c.changes ?? [])
+    setFlags(f.flags ?? [])
   }, [])
 
   // ---------- Open a project ----------
@@ -319,6 +324,7 @@ function App() {
           suggestions={suggestions}
           issues={issues}
           changes={changes}
+          flags={flags}
           busy={busy}
           onApprove={handleApproveMany}
           onReject={handleRejectMany}
@@ -338,15 +344,12 @@ function App() {
   return (
     <div className="flex h-[100dvh] flex-col bg-cream-100 text-ink-900 antialiased">
       <header className="flex h-14 shrink-0 items-center gap-4 border-b border-cream-300 bg-white px-5">
-        {/* Brand */}
         <div className="flex items-center gap-2.5">
-      
           <div className="text-[15px] font-semibold tracking-tight text-ink-900">
             Data Qlean
           </div>
         </div>
 
-        {/* Projects dropdown */}
         <div className="relative" ref={menuRef}>
           <button
             type="button"
@@ -362,7 +365,7 @@ function App() {
           </button>
 
           {menuOpen && (
-            <div className="absolute left-0 top-full z-30 mt-1 w-[320px] rounded-xl border-cream-300 bg-white shadow-lg">
+            <div className="absolute left-0 top-full z-30 mt-1 w-[320px] rounded-xl bg-white shadow-lg">
               <div className="flex items-center justify-between border-b border-cream-200 px-3 py-2">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-ink-500">
                   {projects.length} project{projects.length === 1 ? '' : 's'}
@@ -420,7 +423,6 @@ function App() {
           )}
         </div>
 
-        {/* Add new project */}
         <button
           type="button"
           onClick={() => setView('upload')}
@@ -433,7 +435,6 @@ function App() {
           + Add new project
         </button>
 
-        {/* Status */}
         <div className="ml-auto flex items-center gap-3">
           {view === 'workbench' && sessionId && (
             <div className="flex items-center gap-2 rounded-md border border-cream-300 bg-cream-50 px-2.5 py-1">

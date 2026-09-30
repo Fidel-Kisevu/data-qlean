@@ -121,4 +121,30 @@ def issues_to_suggestions(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "action_label": "Add normalized column",
                 "status": "pending",
             })
+        elif t == "name_case":
+            suggestions.append({
+                "id": sid,
+                "rule_id": issue.get("rule_id"),
+                "issue_type": t,
+                "column": column,
+                "severity": "low",
+                "title": f"Normalize name capitalization in '{column}'",
+                "description": issue.get("message"),
+                "proposed_action": "normalize_name_case",
+                "action_label": "Add normalized column",
+                "status": "pending",
+            })
+        elif t == "numeric_in_name":
+            suggestions.append({
+                "id": sid,
+                "rule_id": issue.get("rule_id"),
+                "issue_type": t,
+                "column": column,
+                "severity": "medium",
+                "title": f"Clean invalid values in '{column}'",
+                "description": issue.get("message"),
+                "proposed_action": "clean_numeric_in_name",
+                "action_label": "Replace with '(missing)'",
+                "status": "pending",
+            })
     return suggestions

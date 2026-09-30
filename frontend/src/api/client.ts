@@ -128,3 +128,15 @@ export const deleteProject = (sessionId: string) =>
   request<{ ok: boolean; deleted: string }>(`/projects/${sessionId}`, {
     method: 'DELETE',
   })
+  export type CellFlag = {
+  row: number
+  column: string
+  rule_id: string
+  severity: 'high' | 'medium' | 'low'
+  message: string
+}
+
+export const fetchFlags = (sessionId: string) =>
+  request<{ session_id: string; count: number; flags: CellFlag[] }>(
+    `/flags/${sessionId}`
+  )
