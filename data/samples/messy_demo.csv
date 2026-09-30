@@ -1,0 +1,7 @@
+name,age,city,notes,empty_col
+Alice,30,Nairobi,  hello  ,
+Bob,xx,Mombasa,world,
+Alice,30,Nairobi,  hello  ,
+Carol,,Kisumu,  test  ,
+,25,Nakuru,ok,
+Dave,40,  Eldoret  ,fine,

@@ -1,0 +1,46 @@
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# ---------- Node / Vite ----------
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+
+# ---------- Environment ----------
+.env
+.env.*
+!.env.example
+
+# ---------- Data (never commit working copies, uploads, or audit logs) ----------
+backend/data/
+data/uploads/*
+!data/uploads/.gitkeep
+data/working/*
+!data/working/.gitkeep
+data/changes/
+*.csv
+!data/samples/*.csv
+
+# ---------- Editors / OS ----------
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ---------- Build artifacts ----------
+tsconfig.tsbuildinfo
