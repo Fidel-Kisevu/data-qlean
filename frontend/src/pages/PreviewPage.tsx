@@ -1,6 +1,4 @@
 import { useMemo, useState } from 'react'
-import { Panel } from '../components/ui/Panel'
-import { SectionHeader } from '../components/ui/SectionHeader'
 
 type PreviewRow = Record<string, unknown>
 
