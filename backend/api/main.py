@@ -5,6 +5,7 @@ from api.changes import router as changes_router
 from api.projects import router as projects_router
 from api.undo import router as undo_router
 from api.flags import router as flags_router
+from api.original import router as original_router
 
 settings = get_settings()
 
@@ -60,3 +61,4 @@ app.include_router(changes_router, prefix="/changes", tags=["Changes"])
 app.include_router(undo_router, prefix="/undo", tags=["Undo"])
 app.include_router(projects_router, prefix="/projects", tags=["Projects"])
 app.include_router(flags_router, prefix="/flags", tags=["Flags"])
+app.include_router(original_router, prefix="/original", tags=["Original"])

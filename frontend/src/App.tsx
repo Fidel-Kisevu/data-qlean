@@ -8,6 +8,7 @@ import {
   fetchChanges,
   fetchDataView,
   fetchFlags,
+  fetchOriginal,
   fetchProjects,
   fetchQuality,
   fetchSuggestions,
@@ -23,9 +24,11 @@ import {
 import { PageBoundary } from './components/ui/PageBoundary'
 import { UploadPage } from './pages/UploadPage'
 import { WorkbenchPage } from './pages/WorkbenchPage'
+import { CleanPage } from './pages/CleanPage'
+import { PreviewPage } from './pages/PreviewPage'
 import type { Change, QualityIssue, Suggestion } from './types'
 
-type View = 'upload' | 'workbench'
+type View = 'upload' | 'workbench' | 'clean' | 'preview'
 
 function App() {
   const [view, setView] = useState<View>('upload')
@@ -44,6 +47,14 @@ function App() {
   const [flags, setFlags] = useState<CellFlag[]>([])
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
+
+  // Preview / original
+  const [originalFilename, setOriginalFilename] = useState<string | null>(null)
+  const [originalColumns, setOriginalColumns] = useState<string[]>([])
+  const [originalRows, setOriginalRows] = useState<Record<string, unknown>[]>([])
+  const [originalTotalRows, setOriginalTotalRows] = useState(0)
+  const [originalFileSize, setOriginalFileSize] = useState<number | null>(null)
+  const [originalLoading, setOriginalLoading] = useState(false)
 
   // ---------- Close dropdown on outside click ----------
   useEffect(() => {
@@ -113,6 +124,32 @@ function App() {
     setChanges(c.changes ?? [])
     setFlags(f.flags ?? [])
   }, [])
+
+  // ---------- Load original (preview) ----------
+  const loadOriginal = useCallback(async (sid: string) => {
+    setOriginalLoading(true)
+    try {
+      const data = await fetchOriginal(sid, 5000, 0)
+      setOriginalFilename(data.filename)
+      setOriginalColumns(data.columns)
+      setOriginalRows(data.rows)
+      setOriginalTotalRows(data.total_rows)
+      setOriginalFileSize(data.file_size_bytes)
+    } catch (error) {
+      setMsg(error instanceof Error ? error.message : 'Failed to load original')
+      setOriginalColumns([])
+      setOriginalRows([])
+    } finally {
+      setOriginalLoading(false)
+    }
+  }, [])
+
+  // Reload original data every time the user opens the preview view
+  useEffect(() => {
+    if (view === 'preview' && sessionId) {
+      loadOriginal(sessionId)
+    }
+  }, [view, sessionId, loadOriginal])
 
   // ---------- Open a project ----------
   const openProject = async (sid: string) => {
@@ -267,6 +304,45 @@ function App() {
       })
     })
 
+  // ---------- Clean page handlers ----------
+  const handleReorderColumns = (order: string[]) =>
+    runAction('Columns reordered.', async () => {
+      await transformWorkingCopy(sessionId!, 'reorder_columns', undefined, undefined, {
+        order,
+      })
+      await recordChange({
+        action: 'rename_column', // reusing existing action label
+        description: `Reordered ${order.length} columns`,
+      })
+    })
+
+  const handleSort = (column: string, ascending: boolean) =>
+    runAction(
+      `Sorted by "${column}" ${ascending ? 'ascending' : 'descending'}.`,
+      async () => {
+        await transformWorkingCopy(sessionId!, 'sort', column, undefined, { ascending })
+        await recordChange({
+          action: 'rename_column',
+          column,
+          description: `Sorted by "${column}" ${ascending ? '↑' : '↓'}`,
+        })
+      }
+    )
+
+  const handleDeleteRows = (indices: number[]) =>
+    runAction(
+      `Deleted ${indices.length} row${indices.length === 1 ? '' : 's'}.`,
+      async () => {
+        await transformWorkingCopy(sessionId!, 'delete_rows', undefined, undefined, {
+          indices,
+        })
+        await recordChange({
+          action: 'rename_column',
+          description: `Deleted ${indices.length} row${indices.length === 1 ? '' : 's'}`,
+        })
+      }
+    )
+
   const handleCellEdit = (rowIndex: number, column: string, value: string) => {
     const previous = dataRows[rowIndex]?.[column]
     setDataRows((prev) =>
@@ -338,6 +414,44 @@ function App() {
         />
       )
     }
+
+    if (view === 'clean' && sessionId) {
+      return (
+        <CleanPage
+          sessionId={sessionId}
+          filename={filename}
+          columns={dataCols}
+          rows={dataRows}
+          changes={changes}
+          suggestions={suggestions}
+          busy={busy}
+          onReorderColumns={handleReorderColumns}
+          onSort={handleSort}
+          onRenameColumn={handleRenameColumn}
+          onDropColumn={handleDropColumn}
+          onCellEdit={handleCellEdit}
+          onExport={handleExport}
+          onDeleteRows={handleDeleteRows}
+        />
+      )
+    }
+
+    if (view === 'preview' && sessionId) {
+      return (
+        <PreviewPage
+          sessionId={sessionId}
+          filename={filename}
+          originalFilename={originalFilename}
+          fileSizeBytes={originalFileSize}
+          columns={originalColumns}
+          rows={originalRows}
+          totalRows={originalTotalRows}
+          loading={originalLoading}
+          onBack={() => setView('workbench')}
+        />
+      )
+    }
+
     return <UploadPage busy={busy} filename={filename} onUpload={onUpload} />
   }
 
@@ -423,6 +537,48 @@ function App() {
           )}
         </div>
 
+        {/* Workbench / Clean / Original nav — only when a session is open */}
+        {sessionId && (
+          <nav className="flex items-center gap-1">
+
+             <button
+              type="button"
+              onClick={() => setView('preview')}
+              className={`rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
+                view === 'preview'
+                  ? 'bg-cream-200 text-ink-900'
+                  : 'text-ink-500 hover:bg-cream-200/70 hover:text-ink-700'
+              }`}
+            >
+              Original
+            </button>
+            
+            <button
+              type="button"
+              onClick={() => setView('workbench')}
+              className={`rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
+                view === 'workbench'
+                  ? 'bg-cream-200 text-ink-900'
+                  : 'text-ink-500 hover:bg-cream-200/70 hover:text-ink-700'
+              }`}
+            >
+              Workbench
+            </button>
+            <button
+              type="button"
+              onClick={() => setView('clean')}
+              className={`rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
+                view === 'clean'
+                  ? 'bg-cream-200 text-ink-900'
+                  : 'text-ink-500 hover:bg-cream-200/70 hover:text-ink-700'
+              }`}
+            >
+             Final Preview
+            </button>
+           
+          </nav>
+        )}
+
         <button
           type="button"
           onClick={() => setView('upload')}
@@ -436,7 +592,7 @@ function App() {
         </button>
 
         <div className="ml-auto flex items-center gap-3">
-          {view === 'workbench' && sessionId && (
+          {(view === 'workbench' || view === 'clean' || view === 'preview') && sessionId && (
             <div className="flex items-center gap-2 rounded-md border border-cream-300 bg-cream-50 px-2.5 py-1">
               <span className="text-[11px] font-medium text-ink-500">
                 {filename || 'Untitled'}
@@ -483,7 +639,7 @@ function App() {
       </header>
 
       <main className="min-h-0 flex-1 overflow-y-auto">
-        {msg && view !== 'workbench' && (
+        {msg && view !== 'workbench' && view !== 'clean' && view !== 'preview' && (
           <div className="mx-auto w-full max-w-5xl px-5 pt-5 md:px-8">
             <div className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-[13px] text-emerald-800">
               <div className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />

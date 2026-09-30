@@ -175,3 +175,21 @@ def drop_column(df: pd.DataFrame, column: str) -> pd.DataFrame:
     if column not in df.columns:
         raise ValueError(f"Column not found: {column}")
     return df.drop(columns=[column])
+def reorder_columns(df: pd.DataFrame, order: list[str]) -> pd.DataFrame:
+    """Reorder columns. Missing columns are dropped; unknown names ignored."""
+    existing = [c for c in order if c in df.columns]
+    extras = [c for c in df.columns if c not in existing]
+    return df[existing + extras]
+
+
+def sort_rows(df: pd.DataFrame, column: str, ascending: bool = True) -> pd.DataFrame:
+    if column not in df.columns:
+        raise ValueError(f"Column not found: {column}")
+    # Sort with stable algorithm so equal values keep their relative order
+    return df.sort_values(by=column, ascending=ascending, kind="stable").reset_index(drop=True)
+
+
+def delete_rows(df: pd.DataFrame, indices: list[int]) -> pd.DataFrame:
+    """Delete rows by 0-based index. Invalid indices are ignored."""
+    valid = [i for i in indices if 0 <= i < len(df)]
+    return df.drop(index=valid).reset_index(drop=True)

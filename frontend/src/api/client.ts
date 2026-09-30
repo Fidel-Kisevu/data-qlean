@@ -52,10 +52,44 @@ export const applySuggestion = (sessionId: string, suggestionId: string, action:
 export const fetchDataView = (sessionId: string, limit = 50, offset = 0) =>
   request<DataViewResponse>(`/data/${sessionId}?limit=${limit}&offset=${offset}`)
 
-export const transformWorkingCopy = (sessionId: string, action: 'rename_column' | 'drop_column', column: string, newName?: string) =>
-  request<{ session_id: string; status: string; action: string; rows: number; columns: string[] }>(`/transform/${sessionId}`, {
+// ---------- Transform ----------
+
+export type TransformAction =
+  | 'rename_column'
+  | 'drop_column'
+  | 'reorder_columns'
+  | 'sort'
+  | 'delete_rows'
+
+export type TransformExtras = {
+  order?: string[]
+  ascending?: boolean
+  indices?: number[]
+}
+
+export const transformWorkingCopy = (
+  sessionId: string,
+  action: TransformAction,
+  column?: string,
+  newName?: string,
+  extra?: TransformExtras
+) =>
+  request<{
+    session_id: string
+    status: string
+    action: string
+    rows: number
+    columns: string[]
+  }>(`/transform/${sessionId}`, {
     method: 'POST',
-    body: JSON.stringify({ action, column, new_name: newName }),
+    body: JSON.stringify({
+      action,
+      column,
+      new_name: newName,
+      order: extra?.order,
+      ascending: extra?.ascending,
+      indices: extra?.indices,
+    }),
   })
 
 export const exportDataUrl = (sessionId: string, format: 'csv' | 'xlsx') =>
@@ -128,7 +162,10 @@ export const deleteProject = (sessionId: string) =>
   request<{ ok: boolean; deleted: string }>(`/projects/${sessionId}`, {
     method: 'DELETE',
   })
-  export type CellFlag = {
+
+// ---------- Cell flags ----------
+
+export type CellFlag = {
   row: number
   column: string
   rule_id: string
@@ -139,4 +176,19 @@ export const deleteProject = (sessionId: string) =>
 export const fetchFlags = (sessionId: string) =>
   request<{ session_id: string; count: number; flags: CellFlag[] }>(
     `/flags/${sessionId}`
+  )
+export type OriginalViewResponse = {
+  session_id: string
+  filename: string
+  file_size_bytes: number
+  total_rows: number
+  offset: number
+  limit: number
+  columns: string[]
+  rows: Record<string, unknown>[]
+}
+
+export const fetchOriginal = (sessionId: string, limit = 5000, offset = 0) =>
+  request<OriginalViewResponse>(
+    `/original/${sessionId}?limit=${limit}&offset=${offset}`
   )
