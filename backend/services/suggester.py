@@ -4,11 +4,7 @@ import hashlib
 
 
 def _stable_id(rule_id: str, column: str | None) -> str:
-    """Deterministic 8-char ID derived from rule + column.
-
-    Same issue always produces the same ID, so approving a suggestion
-    still works after the suggestions list is regenerated.
-    """
+    """Deterministic 8-char ID derived from rule + column."""
     key = f"{rule_id}|{column or ''}"
     return hashlib.md5(key.encode("utf-8")).hexdigest()[:8]
 
@@ -110,6 +106,19 @@ def issues_to_suggestions(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "description": issue.get("message"),
                 "proposed_action": "trim",
                 "action_label": "Trim whitespace",
+                "status": "pending",
+            })
+        elif t == "phone_format":
+            suggestions.append({
+                "id": sid,
+                "rule_id": issue.get("rule_id"),
+                "issue_type": t,
+                "column": column,
+                "severity": "medium",
+                "title": f"Normalize phone numbers in '{column}'",
+                "description": issue.get("message"),
+                "proposed_action": "normalize_phone",
+                "action_label": "Add normalized column",
                 "status": "pending",
             })
     return suggestions
