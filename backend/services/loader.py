@@ -1,14 +1,9 @@
-"""Loader – CSV/Excel → working DataFrame.
-
-This loader does NOT modify data at read time. No rows dropped, no
-columns dropped, no header trimming. Whatever pandas reads is what you
-see in the workbench. All cleaning happens through approved suggestions.
-"""
+"""Loader – CSV/Excel → working DataFrame."""
 from pathlib import Path
 import shutil
 from datetime import datetime, timezone
-import pandas as pd
 import json
+import pandas as pd
 
 
 def project_root() -> Path:
@@ -19,10 +14,13 @@ def _read_excel_smart(file_path: Path) -> pd.DataFrame:
     """Read an Excel file, auto-detecting the header row.
 
     Strategy: scan the first 30 rows. The header is the first row where
-    at least half the columns are non-null. Handles files with leading
-    blank rows, title blocks, or instruction sections.
+    at least half the columns are non-null. Handles leading blank rows,
+    title blocks, or instruction sections.
+
+    All values are read as strings — no type inference — so leading
+    zeros are preserved and phone numbers stay intact.
     """
-    raw = pd.read_excel(file_path, header=None, dtype=object)
+    raw = pd.read_excel(file_path, header=None, dtype=str)
 
     if raw.empty:
         return pd.DataFrame()
@@ -37,10 +35,9 @@ def _read_excel_smart(file_path: Path) -> pd.DataFrame:
             header_row = i
             break
 
-    df = pd.read_excel(file_path, header=header_row)
+    df = pd.read_excel(file_path, header=header_row, dtype=str)
 
     # Drop a leading column that has no name AND is entirely empty
-    # (common when Excel files have a stray empty first column).
     if len(df.columns) > 0:
         first = df.columns[0]
         looks_unnamed = (
@@ -51,16 +48,17 @@ def _read_excel_smart(file_path: Path) -> pd.DataFrame:
 
     return df
 
+
 def _read_csv_smart(file_path: Path) -> pd.DataFrame:
-    """Read a CSV with common delimiter fallbacks. No cleaning."""
+    """Read a CSV with common delimiter fallbacks. All values as strings."""
     for sep in [",", ";", "\t", "|"]:
         try:
-            df = pd.read_csv(file_path, sep=sep)
+            df = pd.read_csv(file_path, sep=sep, dtype=str)
             if len(df.columns) > 1:
                 return df
         except Exception:
             continue
-    return pd.read_csv(file_path, sep=None, engine="python")
+    return pd.read_csv(file_path, sep=None, engine="python", dtype=str)
 
 
 def load_file(file_path: Path) -> pd.DataFrame:
@@ -80,7 +78,7 @@ def save_working_copy(df: pd.DataFrame, working_path: Path) -> None:
 def load_working_copy(working_path: Path) -> pd.DataFrame:
     if not working_path.exists():
         raise FileNotFoundError(f"Working copy not found: {working_path}")
-    return pd.read_csv(working_path)
+    return pd.read_csv(working_path, dtype=str)
 
 
 def get_working_path(session_id: str) -> Path:
@@ -98,11 +96,6 @@ def _snapshots_dir(working_path: Path) -> Path:
 
 
 def snapshot_before_change(working_path: Path) -> Path:
-    """Copy the current working file to a timestamped snapshot.
-
-    Called right before a mutating action so it can be reverted.
-    Returns the snapshot path.
-    """
     if not working_path.exists():
         raise FileNotFoundError(f"Nothing to snapshot: {working_path}")
 
@@ -116,7 +109,6 @@ def snapshot_before_change(working_path: Path) -> Path:
 
 
 def list_snapshots(working_path: Path) -> list[Path]:
-    """All snapshots for a working copy, oldest first."""
     snap_dir = _snapshots_dir(working_path)
     if not snap_dir.exists():
         return []
@@ -124,17 +116,16 @@ def list_snapshots(working_path: Path) -> list[Path]:
 
 
 def restore_snapshot(snapshot_path: Path, working_path: Path) -> None:
-    """Copy a snapshot back over the working file."""
     if not snapshot_path.exists():
         raise FileNotFoundError(f"Snapshot missing: {snapshot_path}")
     shutil.copy2(snapshot_path, working_path)
 
 
 def prune_snapshots(working_path: Path, keep: int = 50) -> None:
-    """Delete all but the N most recent snapshots to cap disk usage."""
     snaps = list_snapshots(working_path)
     for old in snaps[:-keep]:
         old.unlink(missing_ok=True)
+
 
 # ---------- Project metadata ----------
 
@@ -149,7 +140,6 @@ def write_project_meta(
     columns: list[str],
     bytes_size: int | None = None,
 ) -> None:
-    """Record project metadata. Overwrites if it exists."""
     path = _meta_path(session_id)
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -177,7 +167,6 @@ def read_project_meta(session_id: str) -> dict | None:
 
 
 def touch_project_meta(session_id: str) -> None:
-    """Bump updated_at without rewriting everything."""
     meta = read_project_meta(session_id)
     if not meta:
         return
@@ -186,7 +175,6 @@ def touch_project_meta(session_id: str) -> None:
 
 
 def list_projects() -> list[dict]:
-    """Return all projects, newest activity first."""
     working_root = project_root() / "data" / "working"
     if not working_root.exists():
         return []
@@ -205,7 +193,6 @@ def list_projects() -> list[dict]:
 
 
 def delete_project(session_id: str) -> None:
-    """Remove the working copy, its snapshots, its meta, its audit log."""
     working_dir = project_root() / "data" / "working" / session_id
     upload_dir = project_root() / "data" / "uploads" / session_id
     changes_file = project_root() / "data" / "changes" / f"{session_id}.json"
