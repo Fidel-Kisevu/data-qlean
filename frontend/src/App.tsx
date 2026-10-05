@@ -224,14 +224,13 @@ function App() {
         await fn()
         setMsg(successMessage)
         await refreshAll(sessionId)
-        await loadProjects()
       } catch (error) {
         setMsg(error instanceof Error ? error.message : 'Action failed')
       } finally {
         setBusy(false)
       }
     },
-    [sessionId, refreshAll, loadProjects]
+    [sessionId, refreshAll]
   )
 
   // ---------- Change log ----------

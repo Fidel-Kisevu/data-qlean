@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import type { CellFlag } from '../../api/client'
 import { severityCellClass } from './workbench-utils'
 import { ColumnMenu } from './ColumnMenu'
@@ -75,6 +76,7 @@ export function WorkbenchTable({
   } | null>(null)
 
   const searchRef = useRef<HTMLInputElement>(null)
+  const parentRef = useRef<HTMLDivElement>(null)
 
   // Listen for Ctrl+F from App.tsx
   useEffect(() => {
@@ -113,6 +115,22 @@ export function WorkbenchTable({
     setSearch('')
     setColumnFilters({})
   }
+
+  // ── Virtualizer ──
+  // Only the visible rows (+ overscan) are mounted in the DOM.
+  const rowVirtualizer = useVirtualizer({
+    count: filteredRows.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 34,
+    overscan: 10,
+  })
+
+  const virtualItems = rowVirtualizer.getVirtualItems()
+  const paddingTop = virtualItems.length > 0 ? virtualItems[0].start : 0
+  const paddingBottom =
+    virtualItems.length > 0
+      ? rowVirtualizer.getTotalSize() - virtualItems[virtualItems.length - 1].end
+      : 0
 
   // Keyboard navigation on the table
   const handleTableKeyDown = (e: React.KeyboardEvent) => {
@@ -204,8 +222,8 @@ export function WorkbenchTable({
         </span>
       </div>
 
-      {/* ---------- Table ---------- */}
-      <div className="min-h-0 flex-1 overflow-auto">
+      {/* ---------- Table (scroll container with virtualizer) ---------- */}
+      <div ref={parentRef} className="min-h-0 flex-1 overflow-auto">
         <table
           tabIndex={0}
           onKeyDown={handleTableKeyDown}
@@ -317,6 +335,7 @@ export function WorkbenchTable({
               </tr>
             )}
           </thead>
+
           <tbody>
             {filteredRows.length === 0 ? (
               <tr>
@@ -328,105 +347,132 @@ export function WorkbenchTable({
                 </td>
               </tr>
             ) : (
-              filteredRows.map((row) => {
-                const index = rows.indexOf(row)
-                return (
-                  <tr
-                    key={index}
-                    className="border-b border-cream-100 transition-colors hover:bg-cream-50/80"
-                  >
-                    <td className="bg-cream-50/50 px-3 py-2 text-right font-mono text-[10px] tabular-nums text-ink-400">
-                      {index + 1}
-                    </td>
-                    {columns.map((col, colIdx) => {
-                      const isHighlighted = highlightedColumns.includes(col)
-                      const isEditing =
-                        cellEdit?.row === index && cellEdit?.col === col
-                      const isSelected =
-                        selectedCell?.row === filteredRows.indexOf(row) &&
-                        selectedCell?.col === colIdx
-                      const value = row[col]
-                      const flag = flagMap.get(`${index}|${col}`)
-                      const isFlagged = !!flag
+              <>
+                {/* Spacer row above — preserves scroll height for rows scrolled past */}
+                {paddingTop > 0 && (
+                  <tr>
+                    <td
+                      colSpan={columns.length + 1}
+                      style={{ height: paddingTop }}
+                    />
+                  </tr>
+                )}
 
-                      const baseClass =
-                        'max-w-[280px] truncate px-3 py-2 align-top transition-colors duration-150'
+                {/* Only the visible rows are mounted */}
+                {virtualItems.map((virtualRow) => {
+                  const row = filteredRows[virtualRow.index]
+                  const index = rows.indexOf(row)
+                  return (
+                    <tr
+                      key={virtualRow.key}
+                      data-index={virtualRow.index}
+                      ref={rowVirtualizer.measureElement}
+                      className="border-b border-cream-100 transition-colors hover:bg-cream-50/80"
+                    >
+                      <td className="bg-cream-50/50 px-3 py-2 text-right font-mono text-[10px] tabular-nums text-ink-400">
+                        {index + 1}
+                      </td>
+                      {columns.map((col, colIdx) => {
+                        const isHighlighted = highlightedColumns.includes(col)
+                        const isEditing =
+                          cellEdit?.row === index && cellEdit?.col === col
+                        const isSelected =
+                          selectedCell?.row === virtualRow.index &&
+                          selectedCell?.col === colIdx
+                        const value = row[col]
+                        const flag = flagMap.get(`${index}|${col}`)
+                        const isFlagged = !!flag
 
-                      const stateClass = isEditing
-                        ? ''
-                        : isFlagged
-                          ? severityCellClass(flag?.severity ?? 'low')
-                          : isHighlighted
-                            ? 'bg-accent-soft/50'
-                            : isSelected
-                              ? 'ring-2 ring-inset ring-accent/50'
-                              : ''
+                        const baseClass =
+                          'max-w-[280px] truncate px-3 py-2 align-top transition-colors duration-150'
 
-                      return (
-                        <td
-                          key={col}
-                          className={`${baseClass} ${stateClass}`}
-                          title={flag ? flag.message : undefined}
-                          onClick={() =>
-                            setSelectedCell({
-                              row: filteredRows.indexOf(row),
-                              col: colIdx,
-                            })
-                          }
-                        >
-                          {isEditing ? (
-                            <input
-                              autoFocus
-                              value={cellEdit.value}
-                              onChange={(event) =>
-                                onCellEditChange(event.target.value)
-                              }
-                              onBlur={() => {
-                                onCommitCellEdit(index, col, cellEdit.value)
-                                onCancelCellEdit()
-                              }}
-                              onKeyDown={(event) => {
-                                if (event.key === 'Enter') {
-                                  onCommitCellEdit(
+                        const stateClass = isEditing
+                          ? ''
+                          : isFlagged
+                            ? severityCellClass(flag?.severity ?? 'low')
+                            : isHighlighted
+                              ? 'bg-accent-soft/50'
+                              : isSelected
+                                ? 'ring-2 ring-inset ring-accent/50'
+                                : ''
+
+                        return (
+                          <td
+                            key={col}
+                            className={`${baseClass} ${stateClass}`}
+                            title={flag ? flag.message : undefined}
+                            onClick={() =>
+                              setSelectedCell({
+                                row: virtualRow.index,
+                                col: colIdx,
+                              })
+                            }
+                          >
+                            {isEditing ? (
+                              <input
+                                autoFocus
+                                value={cellEdit.value}
+                                onChange={(event) =>
+                                  onCellEditChange(event.target.value)
+                                }
+                                onBlur={() => {
+                                  onCommitCellEdit(index, col, cellEdit.value)
+                                  onCancelCellEdit()
+                                }}
+                                onKeyDown={(event) => {
+                                  if (event.key === 'Enter') {
+                                    onCommitCellEdit(
+                                      index,
+                                      col,
+                                      cellEdit.value
+                                    )
+                                    onCancelCellEdit()
+                                  }
+                                  if (event.key === 'Escape')
+                                    onCancelCellEdit()
+                                }}
+                                className="w-full rounded-md border border-cream-300 bg-white px-2 py-1 font-mono text-[12px] text-ink-900 outline-none ring-accent/30 focus:border-accent focus:ring-2"
+                              />
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  onStartCellEdit(
                                     index,
                                     col,
-                                    cellEdit.value
+                                    value == null ? '' : String(value)
                                   )
-                                  onCancelCellEdit()
-                                }
-                                if (event.key === 'Escape') onCancelCellEdit()
-                              }}
-                              className="w-full rounded-md border border-cream-300 bg-white px-2 py-1 font-mono text-[12px] text-ink-900 outline-none ring-accent/30 focus:border-accent focus:ring-2"
-                            />
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                onStartCellEdit(
-                                  index,
-                                  col,
-                                  value == null ? '' : String(value)
-                                )
-                              }}
-                              className="w-full truncate rounded px-0.5 text-left text-ink-700 transition-colors hover:text-ink-900"
-                              title={value == null ? '' : String(value)}
-                            >
-                              {value == null ? (
-                                <span className="font-mono text-[10px] italic text-ink-400">
-                                  null
-                                </span>
-                              ) : (
-                                String(value)
-                              )}
-                            </button>
-                          )}
-                        </td>
-                      )
-                    })}
+                                }}
+                                className="w-full truncate rounded px-0.5 text-left text-ink-700 transition-colors hover:text-ink-900"
+                                title={value == null ? '' : String(value)}
+                              >
+                                {value == null ? (
+                                  <span className="font-mono text-[10px] italic text-ink-400">
+                                    null
+                                  </span>
+                                ) : (
+                                  String(value)
+                                )}
+                              </button>
+                            )}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  )
+                })}
+
+                {/* Spacer row below — preserves scroll height for rows not yet rendered */}
+                {paddingBottom > 0 && (
+                  <tr>
+                    <td
+                      colSpan={columns.length + 1}
+                      style={{ height: paddingBottom }}
+                    />
                   </tr>
-                )
-              })
+                )}
+              </>
             )}
           </tbody>
         </table>
