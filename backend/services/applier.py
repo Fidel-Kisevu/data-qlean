@@ -386,20 +386,93 @@ def to_boolean(df: pd.DataFrame, column: str, true_values: list[str] | None = No
     return df
 
 
-def to_datetime(df: pd.DataFrame, column: str, dayfirst: bool = False) -> pd.DataFrame:
-    df = df.copy()
-    if column in df.columns:
-        df[column] = pd.to_datetime(df[column], errors="coerce", dayfirst=dayfirst)
-    return df
+def _parse_date_smart(s: str, dayfirst_hint: bool = True):
+    """
+    Parse a single date string, handling mixed formats.
+
+    Strategy:
+      1. If the string has a month name, pandas handles it.
+      2. If it's ISO (YYYY-MM-DD), pandas handles it.
+      3. If it's numeric-only (DD-MM-YYYY, MM-DD-YYYY, etc.):
+         - If one part >12, that part must be the day → infer format
+         - If both parts ≤12, it's ambiguous → use dayfirst_hint
+    """
+    if s is None or pd.isna(s):
+        return pd.NaT
+    s = str(s).strip()
+    if not s or s.lower() in {"nan", "none", "null", "n/a", ""}:
+        return pd.NaT
+
+    # Let pandas try first — handles ISO, month-name, and clean cases
+    try:
+        return pd.to_datetime(s, errors="raise")
+    except Exception:
+        pass
+
+    # Numeric-only formats — try each separator
+    import re as _re
+    m = _re.match(r"^(\d{1,4})[-/.](\d{1,2})[-/.](\d{1,4})$", s)
+    if not m:
+        return pd.NaT
+
+    a, b, c = int(m.group(1)), int(m.group(2)), int(m.group(3))
+
+    # If a is 4 digits, it's YYYY-MM-DD or YYYY-DD-MM
+    if a > 31:
+        # a is the year
+        if b > 12:  # b must be day
+            return pd.to_datetime(f"{a}-{c:02d}-{b:02d}", errors="coerce")
+        if c > 12:  # c must be day
+            return pd.to_datetime(f"{a}-{b:02d}-{c:02d}", errors="coerce")
+        # Both valid months — use hint
+        if dayfirst_hint:
+            return pd.to_datetime(f"{a}-{c:02d}-{b:02d}", errors="coerce")
+        return pd.to_datetime(f"{a}-{b:02d}-{c:02d}", errors="coerce")
+
+    # If c is 4 digits, it's DD-MM-YYYY or MM-DD-YYYY
+    if c > 31:
+        if a > 12:  # a must be day
+            return pd.to_datetime(f"{c}-{b:02d}-{a:02d}", errors="coerce")
+        if b > 12:  # b must be day
+            return pd.to_datetime(f"{c}-{a:02d}-{b:02d}", errors="coerce")
+        # Both valid — use hint
+        if dayfirst_hint:
+            return pd.to_datetime(f"{c}-{b:02d}-{a:02d}", errors="coerce")
+        return pd.to_datetime(f"{c}-{a:02d}-{b:02d}", errors="coerce")
+
+    return pd.NaT
 
 
-def to_datetime_iso(df: pd.DataFrame, column: str, dayfirst: bool = False) -> pd.DataFrame:
-    """Convert to ISO date strings (YYYY-MM-DD)."""
+def to_datetime(df: pd.DataFrame, column: str, dayfirst: bool = True) -> pd.DataFrame:
+    """Convert mixed-format date column to datetime type."""
     df = df.copy()
     if column not in df.columns:
         return df
-    parsed = pd.to_datetime(df[column], errors="coerce", dayfirst=dayfirst)
-    df[column] = parsed.dt.strftime("%Y-%m-%d").where(parsed.notna(), None)
+    df[column] = df[column].apply(lambda v: _parse_date_smart(v, dayfirst_hint=dayfirst))
+    return df
+
+
+def to_datetime_iso(df: pd.DataFrame, column: str, dayfirst: bool = True) -> pd.DataFrame:
+    """
+    Convert mixed-format date column to ISO strings (YYYY-MM-DD).
+
+    Handles:
+      - ISO (2026-04-03)
+      - Month-name (17 Jun 2024)
+      - US numeric (10-15-2024)
+      - Day-first numeric (16/10/2025)
+      - Ambiguous numeric (11-09-2024) — resolved via dayfirst hint
+
+    Adds a `<column>_iso` sibling so the original is preserved.
+    """
+    df = df.copy()
+    if column not in df.columns:
+        return df
+
+    parsed = df[column].apply(lambda v: _parse_date_smart(v, dayfirst_hint=dayfirst))
+
+    new_col = f"{column}_iso"
+    df[new_col] = parsed.dt.strftime("%Y-%m-%d").where(parsed.notna(), None)
     return df
 
 
@@ -771,6 +844,8 @@ def regex_replace_all_columns(df: pd.DataFrame, pattern: str, replace: str,
                 lambda v: compiled.sub(replace, str(v)) if pd.notna(v) else v
             )
     return df
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # 10. DISPATCHER — apply_suggestion
 # ═══════════════════════════════════════════════════════════════════════
@@ -843,9 +918,9 @@ def apply_suggestion(df: pd.DataFrame, suggestion: dict[str, Any]) -> pd.DataFra
     if action == "to_boolean" and column:
         return to_boolean(df, column, params.get("true_values"))
     if action == "to_datetime" and column:
-        return to_datetime(df, column, params.get("dayfirst", False))
+        return to_datetime(df, column, params.get("dayfirst", True))
     if action == "to_datetime_iso" and column:
-        return to_datetime_iso(df, column, params.get("dayfirst", False))
+        return to_datetime_iso(df, column, params.get("dayfirst", True))
     if action == "strip_currency" and column:
         return strip_currency(df, column)
     if action == "strip_percent" and column:
@@ -954,42 +1029,3 @@ def apply_suggestion(df: pd.DataFrame, suggestion: dict[str, Any]) -> pd.DataFra
         return flag_invalid_name(df, column)
 
     return df.copy()
-def replace_value(df: pd.DataFrame, column: str, find: str, replace: str,
-                  case_sensitive: bool = False) -> pd.DataFrame:
-    """Replace all occurrences of `find` with `replace` in a column."""
-    df = df.copy()
-    if column not in df.columns:
-        return df
-
-    if case_sensitive:
-        df[column] = df[column].apply(
-            lambda v: str(v).replace(find, replace) if pd.notna(v) else v
-        )
-    else:
-        # Case-insensitive replace
-        import re as _re
-        pattern = _re.compile(_re.escape(find), _re.IGNORECASE)
-        df[column] = df[column].apply(
-            lambda v: pattern.sub(replace, str(v)) if pd.notna(v) else v
-        )
-    return df
-
-
-def regex_replace(df: pd.DataFrame, column: str, pattern: str, replace: str,
-                  case_sensitive: bool = True) -> pd.DataFrame:
-    """Replace using a regex pattern."""
-    import re as _re
-    df = df.copy()
-    if column not in df.columns:
-        return df
-
-    flags = 0 if case_sensitive else _re.IGNORECASE
-    try:
-        compiled = _re.compile(pattern, flags)
-    except _re.error as e:
-        raise ValueError(f"Invalid regex: {e}")
-
-    df[column] = df[column].apply(
-        lambda v: compiled.sub(replace, str(v)) if pd.notna(v) else v
-    )
-    return df

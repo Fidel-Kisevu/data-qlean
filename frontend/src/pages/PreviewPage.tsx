@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 
 type PreviewRow = Record<string, unknown>
 
@@ -27,6 +28,9 @@ export function PreviewPage({
 }: PreviewPageProps) {
   const [search, setSearch] = useState('')
 
+  // ---- Virtualizer: scroll container ref ----
+  const tableScrollRef = useRef<HTMLDivElement>(null)
+
   const filtered = useMemo(() => {
     if (!search.trim()) return rows
     const q = search.toLowerCase()
@@ -34,6 +38,21 @@ export function PreviewPage({
       Object.values(r).some((v) => String(v ?? '').toLowerCase().includes(q))
     )
   }, [rows, search])
+
+  // ---- Virtualizer: only visible rows are mounted ----
+  const rowVirtualizer = useVirtualizer({
+    count: filtered.length,
+    getScrollElement: () => tableScrollRef.current,
+    estimateSize: () => 34,
+    overscan: 10,
+  })
+
+  const virtualItems = rowVirtualizer.getVirtualItems()
+  const paddingTop = virtualItems.length > 0 ? virtualItems[0].start : 0
+  const paddingBottom =
+    virtualItems.length > 0
+      ? rowVirtualizer.getTotalSize() - virtualItems[virtualItems.length - 1].end
+      : 0
 
   if (!sessionId) {
     return (
@@ -143,9 +162,9 @@ export function PreviewPage({
         </span>
       </div>
 
-      {/* Table */}
+      {/* Table (virtualized) */}
       <div className="min-h-0 flex-1 overflow-hidden bg-white">
-        <div className="h-full overflow-auto">
+        <div ref={tableScrollRef} className="h-full overflow-auto">
           {loading ? (
             <div className="grid h-full place-items-center">
               <p className="text-[13px] text-ink-500">Loading original file…</p>
@@ -172,34 +191,59 @@ export function PreviewPage({
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((row, i) => (
-                  <tr
-                    key={i}
-                    className="border-b border-cream-100 transition-colors hover:bg-cream-50/60"
-                  >
-                    <td className="bg-cream-50/60 px-3 py-2 text-right font-mono text-[10px] tabular-nums text-ink-400">
-                      {i + 1}
-                    </td>
-                    {columns.map((col) => {
-                      const value = row[col]
+                {filtered.length === 0 ? null : (
+                  <>
+                    {/* Top spacer — preserves scroll height for rows above the window */}
+                    {paddingTop > 0 && (
+                      <tr>
+                        <td colSpan={columns.length + 1} style={{ height: paddingTop }} />
+                      </tr>
+                    )}
+
+                    {/* Only the visible rows are mounted */}
+                    {virtualItems.map((virtualRow) => {
+                      const i = virtualRow.index
+                      const row = filtered[i]
                       return (
-                        <td
-                          key={col}
-                          className="max-w-[280px] truncate px-3 py-2 align-top text-ink-700"
-                          title={value == null ? '' : String(value)}
+                        <tr
+                          key={virtualRow.key}
+                          data-index={virtualRow.index}
+                          ref={rowVirtualizer.measureElement}
+                          className="border-b border-cream-100 transition-colors hover:bg-cream-50/60"
                         >
-                          {value == null ? (
-                            <span className="font-mono text-[10px] italic text-ink-400">
-                              null
-                            </span>
-                          ) : (
-                            String(value)
-                          )}
-                        </td>
+                          <td className="bg-cream-50/60 px-3 py-2 text-right font-mono text-[10px] tabular-nums text-ink-400">
+                            {i + 1}
+                          </td>
+                          {columns.map((col) => {
+                            const value = row[col]
+                            return (
+                              <td
+                                key={col}
+                                className="max-w-[280px] truncate px-3 py-2 align-top text-ink-700"
+                                title={value == null ? '' : String(value)}
+                              >
+                                {value == null ? (
+                                  <span className="font-mono text-[10px] italic text-ink-400">
+                                    null
+                                  </span>
+                                ) : (
+                                  String(value)
+                                )}
+                              </td>
+                            )
+                          })}
+                        </tr>
                       )
                     })}
-                  </tr>
-                ))}
+
+                    {/* Bottom spacer — preserves scroll height for rows below the window */}
+                    {paddingBottom > 0 && (
+                      <tr>
+                        <td colSpan={columns.length + 1} style={{ height: paddingBottom }} />
+                      </tr>
+                    )}
+                  </>
+                )}
               </tbody>
             </table>
           )}

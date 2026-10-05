@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { Button } from '../components/ui/Button'
 import { ColumnMenu } from '../components/workbench/ColumnMenu'
 import { ReplaceDialog } from '../components/workbench/ReplaceDialog'
@@ -56,10 +57,28 @@ export function CleanPage(props: CleanPageProps) {
     column: string
   } | null>(null)
 
+  // ---- Virtualizer: scroll container ref ----
+  const tableScrollRef = useRef<HTMLDivElement>(null)
+
   const visibleColumns = useMemo(
     () => columns.filter((c) => !hiddenColumns.has(c)),
     [columns, hiddenColumns]
   )
+
+  // ---- Virtualizer: only visible rows are mounted ----
+  const rowVirtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => tableScrollRef.current,
+    estimateSize: () => 34,
+    overscan: 10,
+  })
+
+  const virtualItems = rowVirtualizer.getVirtualItems()
+  const paddingTop = virtualItems.length > 0 ? virtualItems[0].start : 0
+  const paddingBottom =
+    virtualItems.length > 0
+      ? rowVirtualizer.getTotalSize() - virtualItems[virtualItems.length - 1].end
+      : 0
 
   const toggleColumn = (col: string) => {
     setSelectedColumns((prev) => {
@@ -236,9 +255,9 @@ export function CleanPage(props: CleanPageProps) {
         </div>
       )}
 
-      {/* Table */}
+      {/* Table (virtualized) */}
       <div className="min-h-0 flex-1 overflow-hidden bg-white">
-        <div className="h-full overflow-auto">
+        <div ref={tableScrollRef} className="h-full overflow-auto">
           <table className="min-w-full border-collapse text-[12.5px]">
             <thead className="sticky top-0 z-10">
               <tr>
@@ -356,75 +375,98 @@ export function CleanPage(props: CleanPageProps) {
               </tr>
             </thead>
             <tbody>
-              {rows.map((row, i) => {
-                const isRowSelected = selectedRows.has(i)
-                return (
-                  <tr
-                    key={i}
-                    className={`border-b border-cream-100 transition-colors ${
-                      isRowSelected ? 'bg-amber-50' : 'hover:bg-cream-50/80'
-                    }`}
-                  >
-                    <td className="bg-cream-50/50 px-3 py-2 text-right">
-                      <div className="flex items-center justify-end gap-1.5">
-                        <input
-                          type="checkbox"
-                          checked={isRowSelected}
-                          onChange={() => toggleRow(i)}
-                          className="h-3 w-3 rounded border-cream-300 text-accent"
-                        />
-                        <span className="font-mono text-[10px] tabular-nums text-ink-400">{i + 1}</span>
-                      </div>
-                    </td>
-                    {visibleColumns.map((col) => {
-                      const isEditing = cellEdit?.row === i && cellEdit?.col === col
-                      const value = row[col]
-                      return (
-                        <td key={col} className="max-w-[280px] truncate px-3 py-2 align-top">
-                          {isEditing ? (
+              {rows.length === 0 ? null : (
+                <>
+                  {/* Top spacer — preserves scroll height for rows above the window */}
+                  {paddingTop > 0 && (
+                    <tr>
+                      <td colSpan={visibleColumns.length + 1} style={{ height: paddingTop }} />
+                    </tr>
+                  )}
+
+                  {/* Only the visible rows are mounted */}
+                  {virtualItems.map((virtualRow) => {
+                    const i = virtualRow.index
+                    const row = rows[i]
+                    const isRowSelected = selectedRows.has(i)
+                    return (
+                      <tr
+                        key={virtualRow.key}
+                        data-index={virtualRow.index}
+                        ref={rowVirtualizer.measureElement}
+                        className={`border-b border-cream-100 transition-colors ${
+                          isRowSelected ? 'bg-amber-50' : 'hover:bg-cream-50/80'
+                        }`}
+                      >
+                        <td className="bg-cream-50/50 px-3 py-2 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
                             <input
-                              autoFocus
-                              value={cellEdit.value}
-                              onChange={(e) => setCellEdit({ ...cellEdit, value: e.target.value })}
-                              onBlur={() => {
-                                onCellEdit(i, col, cellEdit.value)
-                                setCellEdit(null)
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  onCellEdit(i, col, cellEdit.value)
-                                  setCellEdit(null)
-                                }
-                                if (e.key === 'Escape') setCellEdit(null)
-                              }}
-                              className="w-full rounded-md border border-cream-300 bg-white px-2 py-1 font-mono text-[12px] outline-none ring-accent/30 focus:border-accent focus:ring-2"
+                              type="checkbox"
+                              checked={isRowSelected}
+                              onChange={() => toggleRow(i)}
+                              className="h-3 w-3 rounded border-cream-300 text-accent"
                             />
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setCellEdit({
-                                  row: i,
-                                  col,
-                                  value: value == null ? '' : String(value),
-                                })
-                              }
-                              className="w-full truncate rounded px-0.5 text-left text-ink-700 transition-colors hover:text-ink-900"
-                              title={value == null ? '' : String(value)}
-                            >
-                              {value == null ? (
-                                <span className="font-mono text-[10px] italic text-ink-400">null</span>
-                              ) : (
-                                String(value)
-                              )}
-                            </button>
-                          )}
+                            <span className="font-mono text-[10px] tabular-nums text-ink-400">{i + 1}</span>
+                          </div>
                         </td>
-                      )
-                    })}
-                  </tr>
-                )
-              })}
+                        {visibleColumns.map((col) => {
+                          const isEditing = cellEdit?.row === i && cellEdit?.col === col
+                          const value = row[col]
+                          return (
+                            <td key={col} className="max-w-[280px] truncate px-3 py-2 align-top">
+                              {isEditing ? (
+                                <input
+                                  autoFocus
+                                  value={cellEdit.value}
+                                  onChange={(e) => setCellEdit({ ...cellEdit, value: e.target.value })}
+                                  onBlur={() => {
+                                    onCellEdit(i, col, cellEdit.value)
+                                    setCellEdit(null)
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      onCellEdit(i, col, cellEdit.value)
+                                      setCellEdit(null)
+                                    }
+                                    if (e.key === 'Escape') setCellEdit(null)
+                                  }}
+                                  className="w-full rounded-md border border-cream-300 bg-white px-2 py-1 font-mono text-[12px] outline-none ring-accent/30 focus:border-accent focus:ring-2"
+                                />
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setCellEdit({
+                                      row: i,
+                                      col,
+                                      value: value == null ? '' : String(value),
+                                    })
+                                  }
+                                  className="w-full truncate rounded px-0.5 text-left text-ink-700 transition-colors hover:text-ink-900"
+                                  title={value == null ? '' : String(value)}
+                                >
+                                  {value == null ? (
+                                    <span className="font-mono text-[10px] italic text-ink-400">null</span>
+                                  ) : (
+                                    String(value)
+                                  )}
+                                </button>
+                              )}
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    )
+                  })}
+
+                  {/* Bottom spacer — preserves scroll height for rows below the window */}
+                  {paddingBottom > 0 && (
+                    <tr>
+                      <td colSpan={visibleColumns.length + 1} style={{ height: paddingBottom }} />
+                    </tr>
+                  )}
+                </>
+              )}
             </tbody>
           </table>
         </div>
