@@ -1,16 +1,32 @@
 export type Severity = 'low' | 'medium' | 'high'
 export type SuggestionStatus = 'pending' | 'approved' | 'rejected'
 
-export type NavItemId =
-  | 'upload'
-  | 'dashboard'
-  | 'data'
-  | 'quality'
-  | 'reconcile'
-  | 'changes'
-  | 'transform'
-  | 'workbench'
-  | 'export'
+export type SuggestionVariant = {
+  action: string
+  label: string
+  params?: Record<string, unknown>
+  recommended?: boolean
+}
+
+export type Suggestion = {
+  id: string
+  title: string
+  description: string
+  severity: Severity
+  status: SuggestionStatus
+  column?: string
+  rule_id?: string
+  issue_type?: string
+  // New structure — one or more choices for the user
+  variants?: SuggestionVariant[]
+  // Backward compat — still sent by the backend for older clients
+  proposed_action?: string
+  action_label?: string
+  // Optional metadata carried from the detector
+  null_pct?: number
+  invalid_count?: number
+  samples?: string[]
+}
 
 export type ProfileColumn = {
   dtype: string
@@ -32,17 +48,6 @@ export type QualityIssue = {
   column?: string
   severity: Severity
   message: string
-}
-
-export type Suggestion = {
-  id: string
-  title: string
-  description: string
-  severity: Severity
-  action_label: string
-  status: SuggestionStatus
-  column?: string
-  rule_id?: string       // ← this was missing
 }
 
 export type DataViewResponse = {

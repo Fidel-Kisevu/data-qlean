@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { ReplaceDialog } from './components/workbench/ReplaceDialog'
 import {
   apiHealthCheck,
+  applyColumnAction,
   applySuggestion,
   clearChangesRemote,
   deleteProject,
@@ -9,11 +11,13 @@ import {
   fetchDataView,
   fetchFlags,
   fetchOriginal,
+  fetchProfile,
   fetchProjects,
   fetchQuality,
   fetchSuggestions,
   popLastChange,
   recordChangeRemote,
+  resetWorkingCopy,
   transformWorkingCopy,
   undoLast,
   uploadFile,
@@ -21,12 +25,13 @@ import {
   type ProjectMeta,
 } from './api/client'
 
+import { AppHeader } from './components/ui/AppHeader'
 import { PageBoundary } from './components/ui/PageBoundary'
 import { UploadPage } from './pages/UploadPage'
 import { WorkbenchPage } from './pages/WorkbenchPage'
 import { CleanPage } from './pages/CleanPage'
 import { PreviewPage } from './pages/PreviewPage'
-import type { Change, QualityIssue, Suggestion } from './types'
+import type { Change, Profile, QualityIssue, Suggestion } from './types'
 
 type View = 'upload' | 'workbench' | 'clean' | 'preview'
 
@@ -34,12 +39,15 @@ function App() {
   const [view, setView] = useState<View>('upload')
   const [projects, setProjects] = useState<ProjectMeta[]>([])
   const [menuOpen, setMenuOpen] = useState(false)
+  const [toolsMenuOpen, setToolsMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
+  const toolsMenuRef = useRef<HTMLDivElement>(null)
   const [backendOk, setBackendOk] = useState<boolean | null>(null)
 
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [filename, setFilename] = useState('')
   const [issues, setIssues] = useState<QualityIssue[]>([])
+  const [profile, setProfile] = useState<Profile | null>(null)
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
   const [dataRows, setDataRows] = useState<Record<string, unknown>[]>([])
   const [dataCols, setDataCols] = useState<string[]>([])
@@ -47,6 +55,7 @@ function App() {
   const [flags, setFlags] = useState<CellFlag[]>([])
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
+  const [toolsDialog, setToolsDialog] = useState<'replace' | 'regex' | null>(null)
 
   // Preview / original
   const [originalFilename, setOriginalFilename] = useState<string | null>(null)
@@ -58,15 +67,19 @@ function App() {
 
   // ---------- Close dropdown on outside click ----------
   useEffect(() => {
-    if (!menuOpen) return
+    if (!menuOpen && !toolsMenuOpen) return
     const onClick = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+      const target = e.target as Node
+      if (menuOpen && menuRef.current && !menuRef.current.contains(target)) {
         setMenuOpen(false)
+      }
+      if (toolsMenuOpen && toolsMenuRef.current && !toolsMenuRef.current.contains(target)) {
+        setToolsMenuOpen(false)
       }
     }
     document.addEventListener('mousedown', onClick)
     return () => document.removeEventListener('mousedown', onClick)
-  }, [menuOpen])
+  }, [menuOpen, toolsMenuOpen])
 
   // ---------- Backend health ----------
   useEffect(() => {
@@ -110,12 +123,13 @@ function App() {
 
   // ---------- Refresh active session ----------
   const refreshAll = useCallback(async (sid: string) => {
-    const [q, s, d, c, f] = await Promise.all([
+    const [q, s, d, c, f, p] = await Promise.all([
       fetchQuality(sid),
       fetchSuggestions(sid),
       fetchDataView(sid, 10000, 0),
       fetchChanges(sid).catch(() => ({ changes: [] })),
       fetchFlags(sid).catch(() => ({ flags: [] })),
+      fetchProfile(sid).catch(() => null),
     ])
     setIssues(q.issues ?? [])
     setSuggestions(s.suggestions ?? [])
@@ -123,6 +137,7 @@ function App() {
     setDataRows(d.rows ?? [])
     setChanges(c.changes ?? [])
     setFlags(f.flags ?? [])
+    setProfile(p)
   }, [])
 
   // ---------- Load original (preview) ----------
@@ -144,7 +159,6 @@ function App() {
     }
   }, [])
 
-  // Reload original data every time the user opens the preview view
   useEffect(() => {
     if (view === 'preview' && sessionId) {
       loadOriginal(sessionId)
@@ -304,6 +318,24 @@ function App() {
       })
     })
 
+  // ---------- Column action menu handler ----------
+  const handleColumnAction = (
+    column: string,
+    action: string,
+    params?: Record<string, unknown>
+  ) =>
+    runAction(
+      `Applied ${action.replace(/_/g, ' ')} to “${column}”.`,
+      async () => {
+        await applyColumnAction(sessionId!, column, action, params)
+        await recordChange({
+          action: 'rename_column',
+          column,
+          description: `Applied ${action.replace(/_/g, ' ')} to “${column}”`,
+        })
+      }
+    )
+
   // ---------- Clean page handlers ----------
   const handleReorderColumns = (order: string[]) =>
     runAction('Columns reordered.', async () => {
@@ -311,7 +343,7 @@ function App() {
         order,
       })
       await recordChange({
-        action: 'rename_column', // reusing existing action label
+        action: 'rename_column',
         description: `Reordered ${order.length} columns`,
       })
     })
@@ -388,6 +420,89 @@ function App() {
     }
   }
 
+  const handleResetToOriginal = async () => {
+    if (!sessionId) return
+    setBusy(true)
+    try {
+      await resetWorkingCopy(sessionId)
+      setMsg('Reset to the original file.')
+      await refreshAll(sessionId)
+    } catch (error) {
+      setMsg(error instanceof Error ? error.message : 'Reset failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleCopyChangeLog = async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(changes, null, 2))
+      setMsg('Change log copied to clipboard.')
+    } catch {
+      setMsg('Copy failed — clipboard is unavailable.')
+    }
+  }
+
+ const handleToolsDialog = (kind: 'replace' | 'regex' | 'rename' | 'drop' | 'reorder') => {
+  if (kind === 'replace' || kind === 'regex') {
+    setToolsDialog(kind)
+    return
+  }
+  if (kind === 'rename') {
+    setMsg('Rename: right-click a column header to rename a specific column.')
+    return
+  }
+  if (kind === 'drop') {
+    setMsg('Drop: right-click a column header to drop a specific column.')
+    return
+  }
+  setMsg('Reorder: open the Clean page and drag a column header.')
+}
+
+const handleToolsAction = (action: string, params?: Record<string, unknown>) => {
+  if (!sessionId) return
+
+  if (action === 'drop_duplicates_keep_first') {
+    if (!confirm('Remove duplicate rows? This keeps the first occurrence of each duplicate.')) return
+    runAction('Removed duplicate rows.', async () => {
+      await applyColumnAction(sessionId, null, action, params)
+      await recordChange({
+        action: 'rename_column',
+        description: 'Removed duplicate rows',
+      })
+    })
+    return
+  }
+
+  if (action === 'drop_empty_rows') {
+    if (!confirm('Remove all completely empty rows?')) return
+    runAction('Removed empty rows.', async () => {
+      await applyColumnAction(sessionId, null, action, params)
+      await recordChange({
+        action: 'rename_column',
+        description: 'Removed empty rows',
+      })
+    })
+    return
+  }
+
+  setMsg(`Unknown tool action: ${action}`)
+}
+
+const handleToolsReplaceApply = (params: Record<string, unknown>) => {
+  if (!sessionId || !toolsDialog) return
+  const action = toolsDialog === 'replace' ? 'replace_value_all' : 'regex_replace_all'
+  const label = toolsDialog === 'replace' ? 'find & replace' : 'regex replace'
+  runAction(`Applied ${label} across all columns.`, async () => {
+    await applyColumnAction(sessionId, null, action, params)
+    await recordChange({
+      action: 'rename_column',
+      description: `Applied ${label} across all columns`,
+    })
+  })
+  setToolsDialog(null)
+}
+
   // ---------- Render ----------
   const renderView = () => {
     if (view === 'workbench' && sessionId) {
@@ -399,6 +514,7 @@ function App() {
           rows={dataRows}
           suggestions={suggestions}
           issues={issues}
+          profile={profile}
           changes={changes}
           flags={flags}
           busy={busy}
@@ -407,6 +523,7 @@ function App() {
           onRenameColumn={handleRenameColumn}
           onDropColumn={handleDropColumn}
           onCellEdit={handleCellEdit}
+          onColumnAction={handleColumnAction}
           onExport={handleExport}
           onClearAudit={handleClearAudit}
           onUndo={handleUndo}
@@ -430,6 +547,7 @@ function App() {
           onRenameColumn={handleRenameColumn}
           onDropColumn={handleDropColumn}
           onCellEdit={handleCellEdit}
+          onColumnAction={handleColumnAction}
           onExport={handleExport}
           onDeleteRows={handleDeleteRows}
         />
@@ -457,186 +575,30 @@ function App() {
 
   return (
     <div className="flex h-[100dvh] flex-col bg-cream-100 text-ink-900 antialiased">
-      <header className="flex h-14 shrink-0 items-center gap-4 border-b border-cream-300 bg-white px-5">
-        <div className="flex items-center gap-2.5">
-          <div className="text-[15px] font-semibold tracking-tight text-ink-900">
-            Data Qlean
-          </div>
-        </div>
-
-        <div className="relative" ref={menuRef}>
-          <button
-            type="button"
-            onClick={() => setMenuOpen((v) => !v)}
-            className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
-              menuOpen
-                ? 'bg-cream-200 text-ink-900'
-                : 'text-ink-500 hover:bg-cream-200/70 hover:text-ink-700'
-            }`}
-          >
-            Projects
-            <span className="text-[9px] opacity-60">▾</span>
-          </button>
-
-          {menuOpen && (
-            <div className="absolute left-0 top-full z-30 mt-1 w-[320px] rounded-xl bg-white shadow-lg">
-              <div className="flex items-center justify-between border-b border-cream-200 px-3 py-2">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-ink-500">
-                  {projects.length} project{projects.length === 1 ? '' : 's'}
-                </p>
-              </div>
-
-              <div className="max-h-[320px] overflow-y-auto p-1.5">
-                {projects.length === 0 ? (
-                  <div className="px-3 py-4 text-center text-[12px] text-ink-500">
-                    No projects yet.
-                  </div>
-                ) : (
-                  projects.map((p) => (
-                    <div
-                      key={p.session_id}
-                      className="group flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-cream-100"
-                    >
-                      <button
-                        type="button"
-                        onClick={() => openProject(p.session_id)}
-                        className="min-w-0 flex-1 truncate text-left"
-                      >
-                        <p
-                          className={`truncate font-mono text-[12px] ${
-                            p.session_id === sessionId
-                              ? 'text-accent'
-                              : 'text-ink-700'
-                          }`}
-                        >
-                          {p.filename}
-                        </p>
-                        <p className="truncate text-[10px] text-ink-400">
-                          {p.rows} rows · {p.columns.length} cols ·{' '}
-                          {formatAgo(new Date(p.updated_at))}
-                        </p>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          if (confirm(`Delete "${p.filename}"? This cannot be undone.`)) {
-                            handleDeleteProject(p.session_id)
-                          }
-                        }}
-                        title="Delete"
-                        className="shrink-0 rounded px-1.5 py-0.5 text-[10px] text-ink-400 opacity-0 transition-opacity hover:bg-rose-50 hover:text-rose-600 group-hover:opacity-100"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Workbench / Clean / Original nav — only when a session is open */}
-        {sessionId && (
-          <nav className="flex items-center gap-1">
-
-             <button
-              type="button"
-              onClick={() => setView('preview')}
-              className={`rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
-                view === 'preview'
-                  ? 'bg-cream-200 text-ink-900'
-                  : 'text-ink-500 hover:bg-cream-200/70 hover:text-ink-700'
-              }`}
-            >
-              Original
-            </button>
-            
-            <button
-              type="button"
-              onClick={() => setView('workbench')}
-              className={`rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
-                view === 'workbench'
-                  ? 'bg-cream-200 text-ink-900'
-                  : 'text-ink-500 hover:bg-cream-200/70 hover:text-ink-700'
-              }`}
-            >
-              Workbench
-            </button>
-            <button
-              type="button"
-              onClick={() => setView('clean')}
-              className={`rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
-                view === 'clean'
-                  ? 'bg-cream-200 text-ink-900'
-                  : 'text-ink-500 hover:bg-cream-200/70 hover:text-ink-700'
-              }`}
-            >
-             Final Preview
-            </button>
-           
-          </nav>
-        )}
-
-        <button
-          type="button"
-          onClick={() => setView('upload')}
-          className={`rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
-            view === 'upload'
-              ? 'bg-cream-200 text-ink-900'
-              : 'text-ink-500 hover:bg-cream-200/70 hover:text-ink-700'
-          }`}
-        >
-          + Add new project
-        </button>
-
-        <div className="ml-auto flex items-center gap-3">
-          {(view === 'workbench' || view === 'clean' || view === 'preview') && sessionId && (
-            <div className="flex items-center gap-2 rounded-md border border-cream-300 bg-cream-50 px-2.5 py-1">
-              <span className="text-[11px] font-medium text-ink-500">
-                {filename || 'Untitled'}
-              </span>
-              <span className="text-[10px] text-ink-400">•</span>
-              <span className="font-mono text-[10px] text-ink-400">
-                {sessionId.slice(0, 6)}
-              </span>
-            </div>
-          )}
-
-          <div className="flex items-center gap-2">
-            <span
-              className={`relative flex h-2 w-2 ${
-                backendOk === true ? '' : 'opacity-80'
-              }`}
-            >
-              <span
-                className={`absolute inline-flex h-full w-full rounded-full ${
-                  backendOk === true
-                    ? 'animate-ping bg-emerald-400 opacity-40'
-                    : ''
-                }`}
-              />
-              <span
-                className={`relative inline-flex h-2 w-2 rounded-full ${
-                  backendOk === true
-                    ? 'bg-emerald-500'
-                    : backendOk === false
-                    ? 'bg-rose-500'
-                    : 'bg-amber-500'
-                }`}
-              />
-            </span>
-            <span className="text-[11px] font-medium text-ink-500">
-              {backendOk === true
-                ? 'Online'
-                : backendOk === false
-                ? 'Offline'
-                : 'Connecting'}
-            </span>
-          </div>
-        </div>
-      </header>
+      <AppHeader
+        view={view}
+        projects={projects}
+        sessionId={sessionId}
+        filename={filename}
+        backendOk={backendOk}
+        menuOpen={menuOpen}
+        menuRef={menuRef}
+        toolsMenuOpen={toolsMenuOpen}
+        toolsMenuRef={toolsMenuRef}
+        busy={busy}
+        columns={dataCols}
+        onToggleMenu={() => setMenuOpen((v) => !v)}
+        onToggleToolsMenu={() => setToolsMenuOpen((v) => !v)}
+        onOpenProject={openProject}
+        onDeleteProject={handleDeleteProject}
+        onSetView={setView}
+        onAddNewProject={() => setView('upload')}
+        onCloseToolsMenu={() => setToolsMenuOpen(false)}
+        onToolsDialog={handleToolsDialog}
+        onToolsAction={handleToolsAction}
+        onResetToOriginal={handleResetToOriginal}
+        onCopyChangeLog={handleCopyChangeLog}
+      />
 
       <main className="min-h-0 flex-1 overflow-y-auto">
         {msg && view !== 'workbench' && view !== 'clean' && view !== 'preview' && (
@@ -649,16 +611,17 @@ function App() {
         )}
         <PageBoundary>{renderView()}</PageBoundary>
       </main>
+      {toolsDialog && (
+  <ReplaceDialog
+    column={null}
+    mode={toolsDialog === 'regex' ? 'regex' : 'plain'}
+    busy={busy}
+    onClose={() => setToolsDialog(null)}
+    onApply={handleToolsReplaceApply}
+  />
+)}
     </div>
   )
-}
-
-function formatAgo(date: Date): string {
-  const seconds = Math.floor((Date.now() - date.getTime()) / 1000)
-  if (seconds < 60) return 'just now'
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
-  return date.toLocaleDateString()
 }
 
 export default App

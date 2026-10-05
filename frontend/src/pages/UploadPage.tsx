@@ -19,7 +19,7 @@ export function UploadPage({ busy, filename, onUpload }: UploadPageProps) {
   }
 
   return (
-    <section className="space-y-6">
+    <section className="space-y-6 mx-auto max-w-[900px] px-4 py-8 sm:px-6 lg:px-8">
       <SectionHeader
         eyebrow="Upload"
         title={filename ? 'Replace current file' : 'Load a messy CSV or Excel file'}
@@ -27,7 +27,7 @@ export function UploadPage({ busy, filename, onUpload }: UploadPageProps) {
           filename ? (
             <p className="text-[12px] text-ink-500">
               Currently loaded:{' '}
-              <span className="font-medium text-ink-800">{filename}</span>
+              <span className="font-bold text-ink-800">{filename}</span>
             </p>
           ) : null
         }

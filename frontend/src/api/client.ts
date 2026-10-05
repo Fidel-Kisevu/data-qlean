@@ -37,6 +37,11 @@ export const uploadFile = (file: File) => {
 export const fetchProfile = (sessionId: string) =>
   request<{ session_id: string; status: string } & Profile>(`/profile/${sessionId}`)
 
+export const resetWorkingCopy = (sessionId: string) =>
+  request<{ session_id: string; status: string; message?: string }>(`/reset/${sessionId}`, {
+    method: 'POST',
+  })
+
 export const fetchQuality = (sessionId: string) =>
   request<{ session_id: string; status: string; count: number; by_severity: Record<string, number>; issues: QualityIssue[] }>(`/quality/${sessionId}`)
 
@@ -192,3 +197,20 @@ export const fetchOriginal = (sessionId: string, limit = 5000, offset = 0) =>
   request<OriginalViewResponse>(
     `/original/${sessionId}?limit=${limit}&offset=${offset}`
   )
+export const applyColumnAction = (
+  sessionId: string,
+  column: string | null,
+  action: string,
+  params?: Record<string, unknown>
+) =>
+  request<{
+    session_id: string
+    status: string
+    action: string
+    column: string | null
+    rows: number
+    columns: string[]
+  }>(`/transform/${sessionId}/apply-action`, {
+    method: 'POST',
+    body: JSON.stringify({ column: column || null, action, params }),
+  })

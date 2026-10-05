@@ -15,7 +15,7 @@ export function SectionHeader({ eyebrow, title, actions }: Props) {
             {eyebrow}
           </p>
         )}
-        <h2 className="mt-1 text-base font-semibold tracking-tight text-ink-900">
+        <h2 className="mt-1 text-base font-bold tracking-tight text-ink-900">
           {title}
         </h2>
       </div>

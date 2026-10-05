@@ -15,6 +15,7 @@ from services.applier import (
     reorder_columns,
     sort_rows,
     delete_rows,
+    apply_suggestion,
 )
 
 router = APIRouter()
@@ -27,6 +28,51 @@ class TransformRequest(BaseModel):
     order: Optional[list[str]] = None
     ascending: Optional[bool] = True
     indices: Optional[list[int]] = None
+
+
+class ApplyActionRequest(BaseModel):
+    column: Optional[str] = None
+    action: str
+    params: Optional[dict] = None
+
+
+@router.post("/{session_id}/apply-action")
+def apply_action(session_id: str, body: ApplyActionRequest):
+    """Apply any applier action directly to a column, without a suggestion.
+
+    Used by the column action menu for manual operations like uppercase,
+    trim, fill with median, etc.
+    """
+    working_path = get_working_path(session_id)
+
+    try:
+        df = load_working_copy(working_path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    fake_suggestion = {
+        "proposed_action": body.action,
+        "column": body.column,
+        "params": body.params or {},
+    }
+
+    try:
+        result_df = apply_suggestion(df, fake_suggestion)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    snapshot_before_change(working_path)
+    save_working_copy(result_df, working_path)
+    touch_project_meta(session_id)
+
+    return {
+        "session_id": session_id,
+        "status": "ok",
+        "action": body.action,
+        "column": body.column,
+        "rows": int(len(result_df)),
+        "columns": list(result_df.columns.astype(str)),
+    }
 
 
 @router.post("/{session_id}")

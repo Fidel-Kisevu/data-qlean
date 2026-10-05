@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Button } from '../components/ui/Button'
+import { ColumnMenu } from '../components/workbench/ColumnMenu'
+import { ReplaceDialog } from '../components/workbench/ReplaceDialog'
 import type { Change, Suggestion } from '../types'
 
 type CleanPageProps = {
@@ -15,6 +17,7 @@ type CleanPageProps = {
   onRenameColumn: (from: string, to: string) => void
   onDropColumn: (column: string) => void
   onCellEdit: (rowIndex: number, column: string, value: string) => void
+  onColumnAction: (column: string, action: string, params?: Record<string, unknown>) => void
   onExport: (format: 'csv' | 'xlsx') => void
   onDeleteRows: (indices: number[]) => void
 }
@@ -32,6 +35,7 @@ export function CleanPage(props: CleanPageProps) {
     onRenameColumn,
     onDropColumn,
     onCellEdit,
+    onColumnAction,
     onExport,
     onDeleteRows,
   } = props
@@ -46,6 +50,11 @@ export function CleanPage(props: CleanPageProps) {
   const [editColumn, setEditColumn] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [cellEdit, setCellEdit] = useState<{ row: number; col: string; value: string } | null>(null)
+  const [menu, setMenu] = useState<{ column: string; x: number; y: number } | null>(null)
+  const [dialog, setDialog] = useState<{
+    action: 'replace_value' | 'regex_replace'
+    column: string
+  } | null>(null)
 
   const visibleColumns = useMemo(
     () => columns.filter((c) => !hiddenColumns.has(c)),
@@ -252,6 +261,10 @@ export function CleanPage(props: CleanPageProps) {
                         setDragColumn(null)
                         setDragOverColumn(null)
                       }}
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        setMenu({ column: col, x: e.clientX, y: e.clientY })
+                      }}
                       className={`group whitespace-nowrap border-b border-cream-200 px-3 py-2.5 text-left font-medium transition-all ${
                         isDragOver ? 'bg-accent-soft' : isSelected ? 'bg-amber-50' : 'bg-cream-50 text-ink-700'
                       } ${dragColumn === col ? 'opacity-50' : ''}`}
@@ -290,7 +303,7 @@ export function CleanPage(props: CleanPageProps) {
                               setEditValue(col)
                             }}
                             className="cursor-grab truncate font-mono text-[11.5px] transition-colors hover:text-accent active:cursor-grabbing"
-                            title="Drag to reorder · double-click to rename"
+                            title="Drag to reorder · double-click to rename · right-click for actions"
                           >
                             {col}
                           </button>
@@ -419,12 +432,42 @@ export function CleanPage(props: CleanPageProps) {
 
       <footer className="flex shrink-0 items-center justify-between border-t border-cream-200 bg-white px-6 py-2.5 text-[12px] text-ink-500">
         <span>
-          Drag a column header to reorder · double-click to rename · click a cell to edit
+          Drag a column header to reorder · double-click to rename · right-click for actions
         </span>
         <span>
           <span className="font-mono font-medium tabular-nums text-ink-800">{changes.length}</span> changes applied
         </span>
       </footer>
+
+      {menu && (
+        <ColumnMenu
+          column={menu.column}
+          x={menu.x}
+          y={menu.y}
+          busy={busy}
+          onClose={() => setMenu(null)}
+          onAction={(action, params) => {
+            onColumnAction(menu.column, action, params)
+            setMenu(null)
+          }}
+          onOpenDialog={(action) => {
+            setDialog({ action, column: menu.column })
+            setMenu(null)
+          }}
+        />
+      )}
+
+      {dialog && (
+        <ReplaceDialog
+          column={dialog.column}
+          mode={dialog.action === 'regex_replace' ? 'regex' : 'plain'}
+          busy={busy}
+          onClose={() => setDialog(null)}
+          onApply={(params) =>
+            onColumnAction(dialog.column, dialog.action, params)
+          }
+        />
+      )}
     </div>
   )
 }
